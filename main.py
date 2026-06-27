@@ -3,12 +3,18 @@ import requests
 from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator
 import datetime
-import re
 
 # ================= CONFIG =================
-BOT_TOKEN = os.getenv("8646836230:AAHBBuVWxYudopDVsaa3ehAp46WBVcSLZAI")
-CHAT_ID = os.getenv("7516609692")
+BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 BASE_URL = "https://www.odbm.org"
+
+# ✅ Error check: Siguraduhing nakuha ang secrets
+if not BOT_TOKEN or not CHAT_ID:
+    print("❌ ERROR: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not found in GitHub Secrets!")
+    print(f"   BOT_TOKEN loaded: {BOT_TOKEN is not None}")
+    print(f"   CHAT_ID loaded: {CHAT_ID is not None}")
+    exit(1)
 # ===========================================
 
 def fetch_todays_devotion_url():
@@ -21,18 +27,16 @@ def fetch_todays_devotion_url():
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
         
-        # Hanapin ang "Today's Devotion" section at ang "Read Today's Devotion" link
-        # Common pattern: ang first devotional card ay usually ang today's
+        # Hanapin ang "Today's Devotion" section
         today_link = soup.find("a", string=lambda text: text and "Read Today's Devotion" in text)
         
         if today_link and today_link.get("href"):
             daily_url = today_link["href"]
-            # Kung relative URL, gawing absolute
             if daily_url.startswith("/"):
                 daily_url = BASE_URL + daily_url
             return daily_url
         else:
-            # Fallback: kunin ang first devotional link sa list
+            # Fallback: kunin ang first devotional link
             first_devotional = soup.find("div", class_="devotional-card") or soup.find("article")
             if first_devotional:
                 link_tag = first_devotional.find("a")
@@ -55,32 +59,26 @@ def fetch_devotion_content(url):
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
         
-        # Kunin ang title (usually h1)
         title_tag = soup.find("h1")
         title = title_tag.get_text(strip=True) if title_tag else "Daily Devotion"
         
-        # Kunin ang scripture (karaniwang nasa h2 na may "Scripture" o nasa separate div)
         scripture = ""
         scripture_section = soup.find(string=lambda text: text and "Today's Scripture" in text)
         if scripture_section:
             scripture_tag = scripture_section.find_next_sibling() or scripture_section.parent.find_next()
             scripture = scripture_tag.get_text(strip=True) if scripture_tag else ""
         
-        # Kunin ang main devotion content
         content = ""
-        # Try common class names for content
         content_div = (soup.find("div", class_="devotion-content") or 
                       soup.find("div", class_="article-body") or
                       soup.find("article") or
                       soup.find("div", attrs={"itemprop": "articleBody"}))
         
         if content_div:
-            # Tanggalin ang mga script, style, at extra elements
             for tag in content_div(["script", "style", "nav", "footer"]):
                 tag.decompose()
             content = content_div.get_text(separator="\n", strip=True)
         
-        # Kung walang nakuha sa content_div, subukang kunin lahat ng paragraphs
         if not content or len(content) < 50:
             paragraphs = soup.find_all("p")
             content = "\n\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
@@ -102,7 +100,6 @@ def translate_text(text):
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     
-    # Hatiin kung mahaba (Telegram limit: 4096 chars)
     chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
     
     for chunk in chunks:
@@ -113,12 +110,15 @@ def send_telegram(message):
         }
         response = requests.post(url, json=payload, timeout=30)
         
-        # === DEBUG LOGGING PARA SA TELEGRAM ===
+        # === DEBUG LOGGING ===
         print(f"📡 Telegram Status Code: {response.status_code}")
         print(f"📡 Telegram Response: {response.text}")
         
         if response.status_code != 200:
-            print(f"⚠️ Telegram API Error: {response.json()}")
+            try:
+                print(f"⚠️ Telegram API Error: {response.json()}")
+            except:
+                print(f"⚠️ Could not parse error response")
 
 if __name__ == "__main__":
     print("🔍 Finding today's devotion URL...")
