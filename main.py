@@ -3,8 +3,6 @@ import requests
 from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator
 import datetime
-import re
-import pytz
 
 # ================= CONFIG =================
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -22,63 +20,53 @@ def fetch_todays_devotion_url():
     headers = {"User-Agent": "Mozilla/5.0"}
     
     try:
+        print(f"🌐 Fetching: {url}")
         res = requests.get(url, headers=headers, timeout=15)
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
         
-        # === DEBUG: Print relevant sections ===
-        print("🔍 Searching for 'Today's Devotion' section...")
+        # === STRATEGY 1: Find <a> tag that contains "Today's Devotion" div ===
+        print("🔍 Strategy 1: Looking for <a> containing 'Today's Devotion' label...")
+        today_label = soup.find("div", string=lambda text: text and "Today's Devotion" in text)
         
-        # Strategy 1: Find h3 with "Today's Devotion", then get the NEXT <a> with href
-        today_heading = soup.find("h3", string=lambda text: text and "Today's Devotion" in text)
-        if today_heading:
-            print("✅ Found 'Today's Devotion' heading")
-            # Get the next <a> tag that has an href (the actual link)
-            today_link = today_heading.find_next("a", href=True)
-            if today_link and today_link.get("href"):
-                daily_url = today_link["href"]
+        if today_label:
+            print("✅ Found 'Today's Devotion' label div")
+            parent_link = today_label.find_parent("a", href=True)
+            if parent_link and parent_link.get("href"):
+                daily_url = parent_link["href"]
                 if daily_url.startswith("/"):
                     daily_url = BASE_URL + daily_url
                 print(f"✅ Found today's devotion URL: {daily_url}")
                 return daily_url
         
-        # Strategy 2: Find any <a> that contains "Read Today's Devotion" text
-        read_today_link = soup.find("a", string=lambda text: text and "Read Today's Devotion" in text)
-        if read_today_link and read_today_link.get("href"):
-            daily_url = read_today_link["href"]
-            if daily_url.startswith("/"):
-                daily_url = BASE_URL + daily_url
-            print(f"✅ Found via 'Read Today's Devotion' text: {daily_url}")
-            return daily_url
+        # === STRATEGY 2: Find the featured <section> with today's devotion ===
+        print("🔍 Strategy 2: Looking for featured section...")
+        featured_section = soup.find("section", class_=lambda c: c and "mb-12" in c and "lg:mb-6" in c)
+        if featured_section:
+            link = featured_section.find("a", href=True)
+            if link and link.get("href") and "/devotional-category/" in link["href"]:
+                daily_url = link["href"]
+                if daily_url.startswith("/"):
+                    daily_url = BASE_URL + daily_url
+                print(f"✅ Found via featured section: {daily_url}")
+                return daily_url
         
-        # Strategy 3: Find the first devotion card after "Today's Devotion" heading
-        # Look for pattern: <h3>Today's Devotion</h3> followed by <a> with image
-        today_section = soup.find(string=lambda text: text and "Today's Devotion" in text)
-        if today_section:
-            parent = today_section.find_parent()
-            if parent:
-                # Look for the next <a> with an image (the devotion card)
-                card_link = parent.find_next("a", href=True)
-                if card_link and card_link.get("href") and "/devotional-category/" in card_link["href"]:
-                    daily_url = card_link["href"]
-                    if daily_url.startswith("/"):
-                        daily_url = BASE_URL + daily_url
-                    print(f"✅ Found via card pattern: {daily_url}")
-                    return daily_url
-        
-        # Strategy 4: Fallback - find first link with /devotional-category/ pattern
+        # === STRATEGY 3: Fallback - first link with /devotional-category/ ===
+        print("🔍 Strategy 3: Fallback to first /devotional-category/ link...")
         fallback_link = soup.find("a", href=lambda href: href and "/devotional-category/" in href)
         if fallback_link:
             daily_url = fallback_link["href"]
             if daily_url.startswith("/"):
                 daily_url = BASE_URL + daily_url
-            print(f"⚠️ Using fallback (first devotional-category link): {daily_url}")
+            print(f"⚠️ Using fallback URL: {daily_url}")
             return daily_url
         
-        # If nothing found, print available links for debugging
-        print("❌ Could not find today's devotion. Available links with 'devotional':")
-        for link in soup.find_all("a", href=lambda href: href and "devotional" in href.lower())[:5]:
-            print(f"   - {link.get('href')} | Text: '{link.get_text(strip=True)[:50]}'")
+        # === DEBUG: Print all devotional links found ===
+        print("❌ Could not find today's devotion. All devotional links:")
+        for i, link in enumerate(soup.find_all("a", href=lambda h: h and "devotional" in h.lower())[:10], 1):
+            href = link.get("href", "N/A")
+            text = link.get_text(strip=True)[:60]
+            print(f"   {i}. {href} | '{text}'")
         
         return None
         
@@ -93,7 +81,7 @@ def fetch_devotion_content(url):
     headers = {"User-Agent": "Mozilla/5.0"}
     
     try:
-        print(f"📥 Fetching: {url}")
+        print(f"📥 Fetching content from: {url}")
         res = requests.get(url, headers=headers, timeout=15)
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
@@ -111,7 +99,7 @@ def fetch_devotion_content(url):
             if scripture_container:
                 scripture = scripture_container.get_text(strip=True)
         
-        # Content: try multiple selectors
+        # Content: try multiple selectors (ODBm specific)
         content = ""
         content_selectors = [
             {"class_": "devotion-content"},
@@ -139,8 +127,7 @@ def fetch_devotion_content(url):
         
         if not content or len(content) < 50:
             print(f"⚠️ Warning: Content seems short ({len(content)} chars)")
-            # Print first 500 chars of page for debugging
-            print(f"🔍 Page preview: {soup.get_text()[:500]}...")
+            print(f"🔍 First 300 chars of page: {soup.get_text()[:300]}...")
         
         full_text = f"{title}\n\n📖 Scripture:\n{scripture}\n\n📝 Devotion:\n{content}"
         return full_text
@@ -184,8 +171,8 @@ if __name__ == "__main__":
     print("🌐 Translating to Tagalog...")
     tl_text = translate_text(eng_text)
     
-    ph_tz = pytz.timezone("Asia/Manila")
-    today = datetime.datetime.now(ph_tz).strftime("%B %d, %Y")
+    # Philippines timezone (UTC+8) - simple approach without pytz
+    today = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%B %d, %Y")
     final_msg = f"🍞 *Daily Bread (Tagalog)*\n📅 {today}\n\n{tl_text}"
     
     print("📤 Sending to Telegram...")
