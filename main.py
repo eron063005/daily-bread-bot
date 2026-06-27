@@ -6,8 +6,8 @@ import datetime
 import re
 
 # ================= CONFIG =================
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+BOT_TOKEN = os.getenv("8646836230:AAHBBuVWxYudopDVsaa3ehAp46WBVcSLZAI")
+CHAT_ID = os.getenv("7516609692")
 BASE_URL = "https://www.odbm.org"
 # ===========================================
 
