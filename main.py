@@ -8,17 +8,14 @@ import datetime
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 BASE_URL = "https://www.odbm.org"
-
-# ✅ Error check: Siguraduhing nakuha ang secrets
-if not BOT_TOKEN or not CHAT_ID:
-    print("❌ ERROR: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not found in GitHub Secrets!")
-    print(f"   BOT_TOKEN loaded: {BOT_TOKEN is not None}")
-    print(f"   CHAT_ID loaded: {CHAT_ID is not None}")
-    exit(1)
 # ===========================================
 
+if not BOT_TOKEN or not CHAT_ID:
+    print("❌ ERROR: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not found!")
+    exit(1)
+
 def fetch_todays_devotion_url():
-    """Pumunta sa main devotionals page at kunin ang link ng TODAY'S devotion"""
+    """Kunin ang link ng TODAY'S devotion mula sa main page"""
     url = f"{BASE_URL}/en/devotionals"
     headers = {"User-Agent": "Mozilla/5.0"}
     
@@ -27,31 +24,34 @@ def fetch_todays_devotion_url():
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
         
-        # Hanapin ang "Today's Devotion" section
-        today_link = soup.find("a", string=lambda text: text and "Read Today's Devotion" in text)
+        # ✅ CORRECT SELECTOR: Hanapin ang h3 na may "Today's Devotion", tapos ang next <a> tag
+        today_heading = soup.find("h3", string=lambda text: text and "Today's Devotion" in text)
         
-        if today_link and today_link.get("href"):
-            daily_url = today_link["href"]
+        if today_heading:
+            today_link = today_heading.find_next("a", href=True)
+            if today_link and today_link.get("href"):
+                daily_url = today_link["href"]
+                if daily_url.startswith("/"):
+                    daily_url = BASE_URL + daily_url
+                print(f"✅ Found today's devotion URL: {daily_url}")
+                return daily_url
+        
+        # Fallback: kunin ang first devotion card
+        first_card = soup.find("a", href=lambda href: href and "/devotional-category/" in href)
+        if first_card:
+            daily_url = first_card["href"]
             if daily_url.startswith("/"):
                 daily_url = BASE_URL + daily_url
+            print(f"⚠️ Using fallback URL: {daily_url}")
             return daily_url
-        else:
-            # Fallback: kunin ang first devotional link
-            first_devotional = soup.find("div", class_="devotional-card") or soup.find("article")
-            if first_devotional:
-                link_tag = first_devotional.find("a")
-                if link_tag and link_tag.get("href"):
-                    daily_url = link_tag["href"]
-                    if daily_url.startswith("/"):
-                        daily_url = BASE_URL + daily_url
-                    return daily_url
-            return None
+            
+        return None
     except Exception as e:
-        print(f"❌ Error fetching today's URL: {str(e)}")
+        print(f"❌ Error fetching URL: {str(e)}")
         return None
 
 def fetch_devotion_content(url):
-    """I-scrape ang actual content ng daily devotion page"""
+    """I-scrape ang actual content ng devotion page"""
     headers = {"User-Agent": "Mozilla/5.0"}
     
     try:
@@ -59,29 +59,43 @@ def fetch_devotion_content(url):
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
         
+        # ✅ Title: usually h1
         title_tag = soup.find("h1")
         title = title_tag.get_text(strip=True) if title_tag else "Daily Devotion"
         
+        # ✅ Scripture: hanapin ang section na may "Today's Scripture"
         scripture = ""
-        scripture_section = soup.find(string=lambda text: text and "Today's Scripture" in text)
-        if scripture_section:
-            scripture_tag = scripture_section.find_next_sibling() or scripture_section.parent.find_next()
-            scripture = scripture_tag.get_text(strip=True) if scripture_tag else ""
+        scripture_label = soup.find(string=lambda text: text and "Today's Scripture" in text)
+        if scripture_label:
+            scripture_container = scripture_label.find_parent() or scripture_label.find_next()
+            if scripture_container:
+                scripture = scripture_container.get_text(strip=True)
         
+        # ✅ Content: try multiple common selectors
         content = ""
-        content_div = (soup.find("div", class_="devotion-content") or 
-                      soup.find("div", class_="article-body") or
-                      soup.find("article") or
-                      soup.find("div", attrs={"itemprop": "articleBody"}))
+        content_selectors = [
+            {"class_": "devotion-content"},
+            {"class_": "article-body"},
+            {"name": "article"},
+            {"attrs": {"itemprop": "articleBody"}},
+            {"class_": "prose"},  # Tailwind common class
+        ]
         
-        if content_div:
-            for tag in content_div(["script", "style", "nav", "footer"]):
-                tag.decompose()
-            content = content_div.get_text(separator="\n", strip=True)
+        for selector in content_selectors:
+            content_div = soup.find(**selector)
+            if content_div:
+                # Tanggalin ang mga hindi kailangan
+                for tag in content_div(["script", "style", "nav", "footer", "header"]):
+                    tag.decompose()
+                content = content_div.get_text(separator="\n", strip=True)
+                if len(content) > 100:  # Valid content should be long enough
+                    break
         
-        if not content or len(content) < 50:
+        # Fallback: kunin ang mga meaningful paragraphs
+        if not content or len(content) < 100:
             paragraphs = soup.find_all("p")
-            content = "\n\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 20])
+            meaningful_p = [p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 30]
+            content = "\n\n".join(meaningful_p[:10])  # Limit to first 10 meaningful paragraphs
         
         full_text = f"{title}\n\n📖 Scripture:\n{scripture}\n\n📝 Devotion:\n{content}"
         return full_text
@@ -99,36 +113,23 @@ def translate_text(text):
 
 def send_telegram(message):
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    
     chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
     
     for chunk in chunks:
-        payload = {
-            "chat_id": CHAT_ID,
-            "text": chunk,
-            "parse_mode": "Markdown"
-        }
+        payload = {"chat_id": CHAT_ID, "text": chunk, "parse_mode": "Markdown"}
         response = requests.post(url, json=payload, timeout=30)
-        
-        # === DEBUG LOGGING ===
-        print(f"📡 Telegram Status Code: {response.status_code}")
-        print(f"📡 Telegram Response: {response.text}")
-        
+        print(f"📡 Telegram Status: {response.status_code}")
         if response.status_code != 200:
-            try:
-                print(f"⚠️ Telegram API Error: {response.json()}")
-            except:
-                print(f"⚠️ Could not parse error response")
+            print(f"⚠️ Error: {response.text}")
 
 if __name__ == "__main__":
     print("🔍 Finding today's devotion URL...")
     daily_url = fetch_todays_devotion_url()
     
     if not daily_url:
-        print("❌ Could not find today's devotion URL. Using fallback message.")
+        print("❌ Could not find today's devotion URL.")
         eng_text = "Sorry, hindi makuha ang today's devotion. Subukan ulit bukas."
     else:
-        print(f"📄 Found URL: {daily_url}")
         print("📥 Fetching content...")
         eng_text = fetch_devotion_content(daily_url)
     
