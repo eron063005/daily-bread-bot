@@ -1,5 +1,6 @@
 import os
 import requests
+import urllib.parse
 from bs4 import BeautifulSoup
 from deep_translator import GoogleTranslator
 import datetime
@@ -8,130 +9,120 @@ import datetime
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 BASE_URL = "https://www.odbm.org"
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+}
 # ===========================================
 
-if not BOT_TOKEN or not CHAT_ID:
-    print("❌ ERROR: TELEGRAM_BOT_TOKEN or TELEGRAM_CHAT_ID not found in Secrets!")
-    exit(1)
-
 def fetch_todays_devotion_url():
-    """Kunin ang link ng TODAY'S devotion"""
+    """Kunin ang link ng TODAY'S devotion gamit ang updated HTML selectors"""
     url = f"{BASE_URL}/en/devotionals"
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
     
     try:
-        res = requests.get(url, headers=headers, timeout=15)
+        print(f"🌐 Fetching: {url}")
+        res = requests.get(url, headers=HEADERS, timeout=15)
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
-        
-        # Hanapin ang div na may text na "Today's Devotion", tapos kunin ang parent <a> tag
-        today_label = soup.find("div", string=lambda text: text and "Today's Devotion" in text)
+
+        # ✅ Strategy 1: Hanapin ang <div> na may "Today's Devotion", tapos kunin ang parent <a>
+        today_label = soup.find("div", string=lambda t: t and "Today's Devotion" in t)
         if today_label:
-            link = today_label.find_parent("a", href=True)
-            if link and link.get("href"):
-                daily_url = link["href"]
-                if daily_url.startswith("/"):
-                    daily_url = BASE_URL + daily_url
-                print(f"✅ Found today's URL: {daily_url}")
-                return daily_url
-                
-        # Fallback: Unang link na may /devotional-category/
-        fallback = soup.find("a", href=lambda h: h and "/devotional-category/" in h)
-        if fallback:
-            daily_url = fallback["href"]
-            if daily_url.startswith("/"):
-                daily_url = BASE_URL + daily_url
-            print(f"⚠️ Using fallback URL: {daily_url}")
-            return daily_url
-            
+            link_tag = today_label.find_parent("a", href=True)
+            if link_tag and link_tag.get("href"):
+                return urllib.parse.urljoin(BASE_URL, link_tag["href"])
+
+        # ✅ Strategy 2: Fallback sa unang link na may "/devotional-category/" (pinakabago sa list)
+        first_link = soup.find("a", href=lambda h: h and "/devotional-category/" in h)
+        if first_link:
+            return urllib.parse.urljoin(BASE_URL, first_link["href"])
+
+        print("❌ Could not find any devotion links in HTML.")
         return None
     except Exception as e:
-        print(f"❌ URL fetch error: {str(e)}")
+        print(f"❌ Error fetching URL: {str(e)}")
         return None
 
 def fetch_devotion_content(url):
-    """I-scrape ang Title, Scripture Ref, at Main Devotion Text"""
-    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
-    
+    """I-scrape ang Title, Scripture, at Devotion Text"""
     try:
-        res = requests.get(url, headers=headers, timeout=15)
+        print(f"📥 Fetching content from: {url}")
+        res = requests.get(url, headers=HEADERS, timeout=15)
         res.raise_for_status()
         soup = BeautifulSoup(res.text, "html.parser")
-        
-        # 1. Title (nasa h1 na may class na text-4xl at text-white)
-        title_tag = soup.find("h1", class_=lambda c: c and "text-4xl" in c)
+
+        # Title
+        title_tag = soup.find("h1") or soup.find("h2")
         title = title_tag.get_text(strip=True) if title_tag else "Daily Devotion"
-        
-        # 2. Scripture Reference (nasa button na may aria-label)
+
+        # Scripture Reference
+        scripture = ""
         scripture_btn = soup.find("button", attrs={"aria-label": lambda a: a and ":" in a})
-        scripture = scripture_btn.get_text(strip=True) if scripture_btn else "Scripture not available"
+        if scripture_btn:
+            scripture = scripture_btn.get_text(strip=True)
         
-        # 3. Main Devotion Content (nasa loob ng div pagkatapos ng <h2>Today's Devotion</h2>)
-        devotion_header = soup.find("h2", string=lambda text: text and "Today's Devotion" in text)
+        # Main Devotion Text (nasa loob ng mga <p> tags sa "Today's Devotion" section)
         content_text = ""
-        
+        devotion_header = soup.find("h2", string=lambda t: t and "Today's Devotion" in t)
         if devotion_header:
-            # Kunin ang next sibling div na naglalaman ng mga <p> tags
-            content_wrapper = devotion_header.find_next_sibling("div")
-            if content_wrapper:
-                paragraphs = content_wrapper.find_all("p")
-                content_text = "\n\n".join([p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)])
-                
-        # Fallback kung hindi nahanap ang specific wrapper
+            # Kunin lahat ng <p> pagkatapos ng header hanggang sa next header o end
+            paragraphs = []
+            sibling = devotion_header.find_next_sibling("p")
+            while sibling:
+                if sibling.name == "h2" or sibling.name == "h3":
+                    break
+                text = sibling.get_text(strip=True)
+                if len(text) > 20: # I-filter ang mga short/empty p tags
+                    paragraphs.append(text)
+                sibling = sibling.find_next_sibling("p")
+            content_text = "\n\n".join(paragraphs)
+        
+        # Fallback kung wala sa specific section
         if not content_text:
-            rich_text = soup.find("div", class_=lambda c: c and "rich-text" in c)
-            if rich_text:
-                paragraphs = rich_text.find_all("p")
-                content_text = "\n\n".join([p.get_text(strip=True) for p in paragraphs if p.get_text(strip=True)])
-                
-        if not content_text:
-            content_text = "Hindi makuha ang content ngayong araw. Subukan ulit bukas."
-            
+            paragraphs = soup.find_all("p")
+            content_text = "\n\n".join([p.get_text(strip=True) for p in paragraphs if len(p.get_text(strip=True)) > 30])
+
         return title, scripture, content_text
     except Exception as e:
         print(f"❌ Content fetch error: {str(e)}")
         return "Error", "", f"Error: {str(e)}"
 
 def translate_text(text):
-    """I-translate ang text sa Tagalog gamit ang Google Translate (chunked para sa limit)"""
+    """I-translate sa Tagalog (chunked para iwas limit)"""
     if not text: return ""
     try:
         chunks = [text[i:i+4500] for i in range(0, len(text), 4500)]
         translator = GoogleTranslator(source='en', target='tl')
-        translated_chunks = [translator.translate(chunk) for chunk in chunks]
-        return "\n\n".join(translated_chunks)
+        translated = [translator.translate(chunk) for chunk in chunks]
+        return "\n\n".join(translated)
     except Exception as e:
-        return f"Translation error: {str(e)}"
+        return f"❌ Translation error: {str(e)}"
 
 def send_telegram(message):
-    """I-send sa Telegram (plain text para iwas markdown breaking)"""
+    """I-send sa Telegram"""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-    # Hatiin kung mahaba (Telegram limit: 4096 chars)
     chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
     
     for chunk in chunks:
-        payload = {
-            "chat_id": CHAT_ID,
-            "text": chunk,
-            "disable_web_page_preview": True
-        }
+        payload = {"chat_id": CHAT_ID, "text": chunk}
         response = requests.post(url, json=payload, timeout=30)
-        if response.status_code != 200:
-            print(f"❌ Telegram API Error: {response.text}")
-        else:
+        if response.status_code == 200:
             print("✅ Successfully sent to Telegram!")
+        else:
+            print(f"⚠️ Telegram API Error: {response.text}")
 
 if __name__ == "__main__":
     print("🔍 Finding today's devotion URL...")
     daily_url = fetch_todays_devotion_url()
     
     if not daily_url:
-        print("❌ Could not find today's devotion URL.")
-        exit(1)
-        
-    print("📥 Scraping content...")
-    title, scripture, content = fetch_devotion_content(daily_url)
-    
+        print("❌ Failed to get URL. Sending fallback message.")
+        title, scripture, content = "Error", "", "Hindi makuha ang devotion ngayon. Subukan ulit bukas."
+    else:
+        print("📥 Scraping content...")
+        title, scripture, content = fetch_devotion_content(daily_url)
+
     print("🌐 Translating to Tagalog...")
     tl_content = translate_text(content)
     
