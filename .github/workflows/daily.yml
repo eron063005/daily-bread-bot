@@ -2,9 +2,9 @@ name: Daily Bread Tagalog
 
 on:
   schedule:
-    # Naka-set ito sa 6:00 AM Philippine Time (22:00 UTC ng nakaraang araw)
+    # 6:00 AM Philippine Time (22:00 UTC)
     - cron: '0 22 * * *'
-  workflow_dispatch: # Para magawa nating i-run manually pindot lang ng button
+  workflow_dispatch:
 
 jobs:
   run-script:
@@ -19,10 +19,13 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
+        run: |
+          pip install -r requirements.txt
+          playwright install chromium --with-deps
 
       - name: Run Daily Bread Bot
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
         run: python main.py
