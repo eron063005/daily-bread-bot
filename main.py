@@ -14,7 +14,7 @@ BASE_URL = "https://www.odbm.org"
 # ===========================================
 
 def fetch_html_with_playwright(url):
-    """Binubuksan ang URL gamit ang headless browser para mag-render ang JS content."""
+    """Opens the URL using a headless browser to let JS content render completely."""
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
@@ -28,20 +28,20 @@ def fetch_html_with_playwright(url):
         return html
 
 def fetch_todays_devotion_url():
-    """Kunin ang link ng devotion mula sa rendered HTML"""
+    """Extracts the devotion link from the fully rendered HTML."""
     url = f"{BASE_URL}/en/devotionals"
     try:
         html = fetch_html_with_playwright(url)
         soup = BeautifulSoup(html, "html.parser")
 
-        # Strategy 1: Hanapin ang text na may "Today's Devotion"
+        # Strategy 1: Find text containing "Today's Devotion"
         today_label = soup.find(lambda tag: tag.name in ["div", "span", "p", "h3"] and tag.text and "Today's Devotion" in tag.text)
         if today_label:
             link_tag = today_label.find_parent("a", href=True)
             if link_tag and link_tag.get("href"):
                 return urllib.parse.urljoin(BASE_URL, link_tag["href"])
 
-        # Strategy 2: Fallback sa unang nakitang devotional category link
+        # Strategy 2: Fallback to the first devotional category link found
         first_link = soup.find("a", href=lambda h: h and "/devotional-category/" in h)
         if first_link:
             return urllib.parse.urljoin(BASE_URL, first_link["href"])
@@ -52,7 +52,7 @@ def fetch_todays_devotion_url():
         return None
 
 def fetch_devotion_content(url):
-    """I-scrape ang Title, Scripture, at Devotion Text mula sa dynamic page"""
+    """Scrapes Title, Scripture, and Devotion Text from the dynamic page."""
     try:
         html = fetch_html_with_playwright(url)
         soup = BeautifulSoup(html, "html.parser")
@@ -72,7 +72,7 @@ def fetch_devotion_content(url):
         all_p = soup.find_all("p")
         for p in all_p:
             text = p.get_text(strip=True)
-            # Salain ang mga basurang text tulas ng copyright statements o maiikling menu items
+            # Filter out footer trash, short menu links, or copyright text
             if len(text) > 40 and "copyright" not in text.lower() and "all rights reserved" not in text.lower():
                 paragraphs.append(text)
                 
@@ -83,9 +83,9 @@ def fetch_devotion_content(url):
         return "Error", "", f"Error: {str(e)}"
 
 def generate_soap_format(title, scripture, content):
-    """Ginagamit ang Gemini API para gawin ang custom SOAP format"""
+    """Uses Gemini API to process the content into a super casual Taglish SOAP format."""
     if not content or content.startswith("Error"):
-        return "Hindi makuha ang nilalaman ng devotion upang magawan ng SOAP format."
+        return "Can't process the devotion text. Looks like something went wrong with the scraper."
     
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
@@ -93,7 +93,15 @@ def generate_soap_format(title, scripture, content):
         prompt = f"""
 You are an expert Christian writer creating an inspiring daily reflection block. 
 Based on the following English devotion, create a response strictly in the requested structure.
-The core reflection items should be written in a conversational, relatable Taglish/Tagalog (casual paragraph form for SOAP).
+
+CRITICAL TONE REQUIREMENT: 
+Write the reflection items in a SUPER CASUAL, natural, and conversational Taglish/Tagalog (the exact way young adult urban Filipinos chat or message each other online). 
+Do NOT use deeply formal, traditional, or old Tagalog words. 
+- Instead of "sakripisyo", use "sacrifice".
+- Instead of "pag-alaala/pag-obserba", use "pag-alala" or "pagre-remind".
+- Instead of "gawi", use "habit" or "practice".
+- Instead of "ipinahahayag", use "shine-share" or "ino-observe".
+Make it feel like a text message from a close friend. Warm, chill, relatable, and extremely easy to absorb.
 
 Here is the devotion data:
 Title: {title}
@@ -103,33 +111,33 @@ Content: {content}
 Output Format Required (Follow this exact layout and wording for headings):
 
 📖 Brief Summary (short lang)
-[Write a short summary paragraph in Tagalog explaining the story and core message]
+[Write a short, super casual summary paragraph in Taglish explaining the story and core message]
 
 🧾 SOAP (Taglish casual, paragraph form)
 S (Scripture):
-[Write down the verse or reference and what it says in 1-2 Tagalog sentences]
+[Write down the verse or reference and what it says in 1-2 very casual Taglish sentences]
 
 O (Observation):
-[Write a short paragraph analyzing the context, what God wants us to learn from this, and what it implies]
+[Write a short paragraph analyzing the context, what God wants us to learn, and what it implies in a chatty, conversational tone]
 
 A (Application):
 [Write a highly practical personal application paragraph starting with "Sa araw-araw..." or "Gusto kong..." on how to live this out]
 
 P (Prayer):
-[Write a short conversational prayer in Tagalog starting with "Lord..." and ending with "Amen."]
+[Write a short conversational prayer in casual Taglish starting with "Lord..." and ending with "Amen."]
 
 ⭐ Important Points (short lang)
-[Bullet point 1]
-[Bullet point 2]
-[Bullet point 3]
-[Bullet point 4]
-[Bullet point 5]
+[Bullet point 1 using short, punchy casual Taglish]
+[Bullet point 2 using short, punchy casual Taglish]
+[Bullet point 3 using short, punchy casual Taglish]
+[Bullet point 4 using short, punchy casual Taglish]
+[Bullet point 5 using short, punchy casual Taglish]
 
 🎯 One-Sentence Takeaway
-[Provide a punchy, memorable one-sentence concluding takeaway in Tagalog with relevant emojis]
+[Provide a punchy, memorable one-sentence concluding takeaway in casual Taglish with relevant emojis]
 """
         
-        print("🤖 Generating SOAP text via Gemini AI...")
+        print("🤖 Generating SUPER CASUAL SOAP text via Gemini AI...")
         response = client.models.generate_content(
             model='gemini-2.5-flash',
             contents=prompt,
@@ -137,10 +145,10 @@ P (Prayer):
         return response.text
     except Exception as e:
         print(f"❌ AI Generation Error: {str(e)}")
-        return "⚠️ Error sa pag-proseso ng AI para sa SOAP structure."
+        return "⚠️ Failed to generate SOAP format due to an AI processing error."
 
 def send_telegram(message):
-    """I-send ang pinal na mensahe sa Telegram (hinahati kung lumampas sa limit)"""
+    """Sends the final message block to Telegram, chunking it if it hits limits."""
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     chunks = [message[i:i+4000] for i in range(0, len(message), 4000)]
     
@@ -154,12 +162,11 @@ def send_telegram(message):
 
 if __name__ == "__main__":
     print("🔍 Finding today's devotion URL...")
-    # Maaari ring palitan ng hardcoded link para sa testing: daily_url = "https://www.odbm.org/en/devotionals/devotional-category/praying-to-grow?ts=1782691200000"
     daily_url = fetch_todays_devotion_url()
     
     if not daily_url:
         print("❌ Failed to get URL.")
-        title, scripture, content = "Error", "", "Hindi makuha ang devotion ngayon. Subukan ulit bukas."
+        title, scripture, content = "Error", "", "Couldn't grab today's devotion link. Let's try again tomorrow!"
         ai_analysis = content
     else:
         print("📥 Scraping content...")
@@ -167,7 +174,7 @@ if __name__ == "__main__":
         print("✨ Processing with AI for customized format...")
         ai_analysis = generate_soap_format(title, scripture, content)
 
-    # Philippine Time (UTC+8)
+    # Philippine Time (Base on UTC+8)
     today_ph = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%B %d, %Y")
     
     final_msg = (
