@@ -23,33 +23,26 @@ def fetch_html_with_playwright(url):
         })
         print(f"🌐 Loading page via Playwright: {url}")
         page.goto(url, wait_until="networkidle", timeout=30000)
+        page.wait_for_timeout(3000) 
         html = page.content()
         browser.close()
         return html
 
-def fetch_todays_devotion_url():
-    """Extracts the devotion link from the fully rendered HTML."""
-    url = f"{BASE_URL}/en/devotionals"
-    try:
-        html = fetch_html_with_playwright(url)
-        soup = BeautifulSoup(html, "html.parser")
-
-        # Strategy 1: Find text containing "Today's Devotion"
-        today_label = soup.find(lambda tag: tag.name in ["div", "span", "p", "h3"] and tag.text and "Today's Devotion" in tag.text)
-        if today_label:
-            link_tag = today_label.find_parent("a", href=True)
-            if link_tag and link_tag.get("href"):
-                return urllib.parse.urljoin(BASE_URL, link_tag["href"])
-
-        # Strategy 2: Fallback to the first devotional category link found
-        first_link = soup.find("a", href=lambda h: h and "/devotional-category/" in h)
-        if first_link:
-            return urllib.parse.urljoin(BASE_URL, first_link["href"])
-
-        return None
-    except Exception as e:
-        print(f"❌ Error fetching URL: {str(e)}")
-        return None
+def get_target_date_url():
+    """Calculates the exact timestamp for the current day in PH and structures the URL directly."""
+    # Kumuha ng exact date ngayon sa Philippine Time (UTC+8)
+    now_ph = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+    
+    # I-set sa mismong hatinggabi (00:00:00) ng kasalukuyang araw para makuha ang tamang Epoch Unix timestamp
+    midnight_ph = datetime.datetime(now_ph.year, now_ph.month, now_ph.day, 0, 0, 0)
+    
+    # I-convert sa milliseconds (ito ang ginagamit ng ?ts= parameter sa website)
+    ts_ms = int(midnight_ph.timestamp()) * 1000
+    
+    # Direkta nating targetin ang pangkalahatang kategorya gamit ang eksaktong timestamp ngayon
+    direct_url = f"{BASE_URL}/en/devotionals/devotional-category/praying-to-grow?ts={ts_ms}"
+    print(f"🎯 Generated Direct Target URL: {direct_url}")
+    return direct_url
 
 def fetch_devotion_content(url):
     """Scrapes Title, Scripture, and Devotion Text from the dynamic page."""
@@ -72,7 +65,6 @@ def fetch_devotion_content(url):
         all_p = soup.find_all("p")
         for p in all_p:
             text = p.get_text(strip=True)
-            # Filter out footer trash, short menu links, or copyright text
             if len(text) > 40 and "copyright" not in text.lower() and "all rights reserved" not in text.lower():
                 paragraphs.append(text)
                 
@@ -161,18 +153,14 @@ def send_telegram(message):
             print(f"⚠️ Telegram API Error: {response.text}")
 
 if __name__ == "__main__":
-    print("🔍 Finding today's devotion URL...")
-    daily_url = fetch_todays_devotion_url()
+    print("🔍 Generating today's target URL via timestamp calculation...")
+    daily_url = get_target_date_url()
     
-    if not daily_url:
-        print("❌ Failed to get URL.")
-        title, scripture, content = "Error", "", "Couldn't grab today's devotion link. Let's try again tomorrow!"
-        ai_analysis = content
-    else:
-        print("📥 Scraping content...")
-        title, scripture, content = fetch_devotion_content(daily_url)
-        print("✨ Processing with AI for customized format...")
-        ai_analysis = generate_soap_format(title, scripture, content)
+    print("📥 Scraping content...")
+    title, scripture, content = fetch_devotion_content(daily_url)
+    
+    print("✨ Processing with AI for customized format...")
+    ai_analysis = generate_soap_format(title, scripture, content)
 
     # Philippine Time (Base on UTC+8)
     today_ph = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime("%B %d, %Y")
