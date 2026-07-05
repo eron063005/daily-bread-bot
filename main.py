@@ -23,24 +23,24 @@ def fetch_html_with_playwright(url):
         })
         print(f"🌐 Loading page via Playwright: {url}")
         page.goto(url, wait_until="networkidle", timeout=30000)
-        page.wait_for_timeout(3000) 
+        page.wait_for_timeout(4000) 
         html = page.content()
         browser.close()
         return html
 
 def get_target_date_url():
-    """Calculates the exact timestamp for the current day in PH and structures the URL directly."""
+    """Calculates the dynamic Epoch Unix timestamp matching current day in PH time zone."""
     # Kumuha ng exact date ngayon sa Philippine Time (UTC+8)
     now_ph = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
     
-    # I-set sa mismong hatinggabi (00:00:00) ng kasalukuyang araw para makuha ang tamang Epoch Unix timestamp
+    # Set explicitly to local midnight configuration
     midnight_ph = datetime.datetime(now_ph.year, now_ph.month, now_ph.day, 0, 0, 0)
     
-    # I-convert sa milliseconds (ito ang ginagamit ng ?ts= parameter sa website)
+    # Local converted milliseconds token data
     ts_ms = int(midnight_ph.timestamp()) * 1000
     
-    # Direkta nating targetin ang pangkalahatang kategorya gamit ang eksaktong timestamp ngayon
-    direct_url = f"{BASE_URL}/en/devotionals/devotional-category/praying-to-grow?ts={ts_ms}"
+    # Ginamit na natin ang standard /en/devotionals directory path imbes na yung 'praying-to-grow' series track link
+    direct_url = f"{BASE_URL}/en/devotionals?ts={ts_ms}"
     print(f"🎯 Generated Direct Target URL: {direct_url}")
     return direct_url
 
@@ -153,7 +153,7 @@ def send_telegram(message):
             print(f"⚠️ Telegram API Error: {response.text}")
 
 if __name__ == "__main__":
-    print("🔍 Generating today's target URL via timestamp calculation...")
+    print("🔍 Generating today's target URL via global timestamp calculation...")
     daily_url = get_target_date_url()
     
     print("📥 Scraping content...")
